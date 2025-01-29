@@ -7,11 +7,15 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from pydantic import BaseModel
+import os
+import anthropic
+
 
 # Load environment variables
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-claude_api_key = os.getenv("CLAUDE_API_KEY")
+claude_api_key = os.getenv("ANTHROPIC_API_KEY")
+client = anthropic.Anthropic(api_key=claude_api_key)
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -24,10 +28,11 @@ class PromptRequest(BaseModel):
     prompt: str
 
 # System Prompt for OpenAI and Claude
-SYSTEM_PROMPT = "Write an essay for high school students, fully humanized."
+SYSTEM_PROMPT = """You are an expert in writting. Write a response that have analytical and creative tone for high school students university students. 
+The response should be informative and engaging. Keep your tone as student and write as human written. You can use the following prompt to start your response:"""
 
 # Word limit (approx. 180 words = ~500 tokens)
-WORD_LIMIT_TOKENS = 500
+WORD_LIMIT_TOKENS = 2048
 
 @app.get("/health")
 async def health_check():
@@ -53,33 +58,25 @@ async def process_openai_prompt(request: PromptRequest):
         raise HTTPException(status_code=500, detail="Error generating response from OpenAI")
 
 # ✅ 2️⃣ API to Process a Single Prompt via Request Body (Claude 3.5)
+
 @app.post("/process-claude")
 async def process_claude_prompt(request: PromptRequest):
-    """Process a single prompt using Claude 3.5 with system prompt and word limit."""
+    """Process a single prompt using Claude 3.5 Sonnet with system prompt and word limit."""
     try:
-        claude_api_url = "https://api.anthropic.com/v1/messages"
-        headers = {
-            "x-api-key": claude_api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "claude-3.5",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},  # System instruction
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=WORD_LIMIT_TOKENS,
+            system=SYSTEM_PROMPT,
+            messages=[
                 {"role": "user", "content": request.prompt}
-            ],
-            "max_tokens": WORD_LIMIT_TOKENS
-        }
-        response = requests.post(claude_api_url, json=payload, headers=headers)
-        response_data = response.json()
-
-        if "error" in response_data:
-            raise HTTPException(status_code=500, detail=response_data["error"]["message"])
-
-        return {"prompt": request.prompt, "response": response_data["content"]}
+            ]
+        )
+        
+        logging.info(f"Claude API Response: {response}")
+        return {"prompt": request.prompt, "response": response.content}
+    
     except Exception as e:
-        logging.error(f"Error calling Claude API: {str(e)}")
+        logging.error(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail="Error generating response from Claude")
 
 # ✅ 3️⃣ CSV Upload for OpenAI Processing
