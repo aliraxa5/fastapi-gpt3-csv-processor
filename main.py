@@ -7,7 +7,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from pydantic import BaseModel
-import os
+from datetime import datetime
 import anthropic
 
 
@@ -28,10 +28,10 @@ class PromptRequest(BaseModel):
     prompt: str
 
 # System Prompt for OpenAI and Claude
-SYSTEM_PROMPT = """You are an expert in writting. Write a response that have analytical and creative tone for high school students university students. 
-The response should be informative and engaging. Keep your tone as student and write as human written. You can use the following prompt to start your response:"""
+SYSTEM_PROMPT = """You are an expert in writing. Write a response that has an analytical and creative tone for high school and university students. 
+The response should be informative and engaging. Keep your tone as student-friendly and write as if human-written. You can use the following prompt to start your response:"""
 
-# Word limit (approx. 180 words = ~500 tokens)
+# Word limit (approx. 2048 tokens)
 WORD_LIMIT_TOKENS = 2048
 
 @app.get("/health")
@@ -39,26 +39,26 @@ async def health_check():
     """Check if the API is running."""
     return {"status": "healthy"}
 
-# ✅ 1️⃣ API to Process a Single Prompt via Request Body (OpenAI)
+# OpenAI Processing Endpoint
 @app.post("/process-openai")
 async def process_openai_prompt(request: PromptRequest):
     """Process a single prompt using OpenAI GPT-3.5 Turbo with system prompt and word limit."""
     try:
-        response = openai.ChatCompletion.create(
+        client = openai.OpenAI()
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},  # System instruction
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": request.prompt}
             ],
             max_tokens=WORD_LIMIT_TOKENS
         )
-        return {"prompt": request.prompt, "response": response["choices"][0]["message"]["content"]}
+        return {"prompt": request.prompt, "response": response.choices[0].message.content}
     except Exception as e:
         logging.error(f"Error calling OpenAI: {str(e)}")
         raise HTTPException(status_code=500, detail="Error generating response from OpenAI")
 
-# ✅ 2️⃣ API to Process a Single Prompt via Request Body (Claude 3.5)
-
+# Claude Processing Endpoint
 @app.post("/process-claude")
 async def process_claude_prompt(request: PromptRequest):
     """Process a single prompt using Claude 3.5 Sonnet with system prompt and word limit."""
@@ -67,19 +67,14 @@ async def process_claude_prompt(request: PromptRequest):
             model="claude-3-5-sonnet-20241022",
             max_tokens=WORD_LIMIT_TOKENS,
             system=SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": request.prompt}
-            ]
+            messages=[{"role": "user", "content": request.prompt}]
         )
-        
-        logging.info(f"Claude API Response: {response}")
         return {"prompt": request.prompt, "response": response.content}
-    
     except Exception as e:
         logging.error(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail="Error generating response from Claude")
 
-# ✅ 3️⃣ CSV Upload for OpenAI Processing
+#  CSV Upload for OpenAI Processing
 @app.post("/upload-openai")
 async def process_openai_csv(file: UploadFile = File(...)):
     """Process a CSV file of prompts using OpenAI and return the output CSV."""
@@ -99,7 +94,7 @@ async def process_openai_csv(file: UploadFile = File(...)):
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},  # System instruction
+                    {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=WORD_LIMIT_TOKENS
@@ -109,13 +104,16 @@ async def process_openai_csv(file: UploadFile = File(...)):
             generated_text = f"Error generating response: {str(e)}"
         responses.append({"prompt": prompt, "response": generated_text})
 
-    output_file = "processed_openai.csv"
+    # Generate unique filename
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    output_file = f"processed_openai_{timestamp}.csv"
+
     output_df = pd.DataFrame(responses)
     output_df.to_csv(output_file, index=False)
 
-    return FileResponse(output_file, media_type="text/csv", filename="processed_openai.csv")
+    return FileResponse(output_file, media_type="text/csv", filename=output_file)
 
-# ✅ 4️⃣ CSV Upload for Claude Processing
+#  CSV Upload for Claude Processing
 @app.post("/upload-claude")
 async def process_claude_csv(file: UploadFile = File(...)):
     """Process a CSV file of prompts using Claude 3.5 and return the output CSV."""
@@ -132,33 +130,22 @@ async def process_claude_csv(file: UploadFile = File(...)):
     responses = []
     for prompt in df["prompt"]:
         try:
-            claude_api_url = "https://api.anthropic.com/v1/messages"
-            headers = {
-                "x-api-key": claude_api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "claude-3.5",
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},  # System instruction
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": WORD_LIMIT_TOKENS
-            }
-            response = requests.post(claude_api_url, json=payload, headers=headers)
-            response_data = response.json()
-            
-            if "error" in response_data:
-                generated_text = f"Error generating response: {response_data['error']['message']}"
-            else:
-                generated_text = response_data["content"]
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=WORD_LIMIT_TOKENS,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            generated_text = response.content
         except Exception as e:
             generated_text = f"Error generating response: {str(e)}"
         responses.append({"prompt": prompt, "response": generated_text})
 
-    output_file = "processed_claude.csv"
+    # Generate unique filename
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    output_file = f"processed_claude_{timestamp}.csv"
+
     output_df = pd.DataFrame(responses)
     output_df.to_csv(output_file, index=False)
 
-    return FileResponse(output_file, media_type="text/csv", filename="processed_claude.csv")
+    return FileResponse(output_file, media_type="text/csv", filename=output_file)
